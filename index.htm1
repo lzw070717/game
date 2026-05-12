@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>空间四子棋 - 3D Gravity Connect</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js for 3D animation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- Tween.js for smooth 3D transitions -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+            overflow: hidden; /* Prevent scrolling, full app feel */
+            user-select: none;
+        }
+
+        /* Glassmorphism utilities */
+        .glass {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Board Cell Styling */
+        .cell {
+            width: 100%;
+            aspect-ratio: 1 / 1;
+            background-color: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(51, 65, 85, 0.6);
+            border-radius: 6px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+
+        .cell:hover {
+            background-color: rgba(51, 65, 85, 0.8);
+        }
+
+        /* Pieces */
+        .piece {
+            width: 80%;
+            height: 80%;
+            border-radius: 50%;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            transform: scale(0);
+            box-shadow: inset -2px -2px 6px rgba(0,0,0,0.4), 0 0 10px currentColor;
+        }
+        
+        .piece.show {
+            transform: scale(1);
+        }
+
+        .piece.p1 {
+            background: radial-gradient(circle at 30% 30%, #60a5fa, #2563eb);
+            color: #3b82f6;
+        }
+
+        .piece.p2 {
+            background: radial-gradient(circle at 30% 30%, #f87171, #dc2626);
+            color: #ef4444;
+        }
+
+        /* Ghost piece for valid hover */
+        .cell.valid-hover-p1:hover::after {
+            content: '';
+            position: absolute;
+            width: 80%;
+            height: 80%;
+            border-radius: 50%;
+            background-color: #3b82f6;
+            opacity: 0.3;
+        }
+        .cell.valid-hover-p2:hover::after {
+            content: '';
+            position: absolute;
+            width: 80%;
+            height: 80%;
+            border-radius: 50%;
+            background-color: #ef4444;
+            opacity: 0.3;
+        }
+
+        /* Invalid hover indicator */
+        .cell.invalid-hover:hover {
+            cursor: not-allowed;
+            border-color: rgba(239, 68, 68, 0.5);
+            background-color: rgba(239, 68, 68, 0.1);
+        }
+
+        /* Last move highlight */
+        .last-move::before {
+            content: '';
+            position: absolute;
+            width: 110%;
+            height: 110%;
+            border-radius: 50%;
+            border: 2px solid currentColor;
+            animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+            pointer-events: none;
+        }
+        
+        @keyframes ping {
+            75%, 100% {
+                transform: scale(1.4);
+                opacity: 0;
+            }
+        }
+
+        /* Shake animation for invalid moves */
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            20%, 60% { transform: translateX(-5px); }
+            40%, 80% { transform: translateX(5px); }
+        }
+        .shake {
+            animation: shake 0.4s ease-in-out;
+            border-color: #ef4444 !important;
+        }
+
+        /* Active Layer Indicator */
+        .layer-title {
+            transition: color 0.3s, text-shadow 0.3s;
+        }
+        .layer-active {
+            color: #38bdf8;
+            text-shadow: 0 0 8px rgba(56, 189, 248, 0.6);
+        }
+
+        /* UI Transitions */
+        .screen-transition {
+            transition: opacity 0.5s ease, transform 0.5s ease;
+        }
+        .hidden-screen {
+            opacity: 0;
+            pointer-events: none;
+            position: absolute;
+            z-index: -1;
+            transform: scale(0.95);
+        }
+        
+        #toast {
+            transition: transform 0.3s ease, opacity 0.3s ease;
+            transform: translateY(100px);
+            opacity: 0;
+        }
+        #toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        /* 3D Canvas container */
+        #three-container {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 50;
+            pointer-events: none; /* Initially off */
+            opacity: 0;
+            transition: opacity 1s ease;
+            background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
+        }
+        #three-container.active {
+            pointer-events: auto;
+            opacity: 1;
+        }
+        
+        /* Custom Scrollbar for status panel */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    </style>
+</head>
+<body class="w-screen h-screen flex items-center justify-center relative">
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-8 left-1/2 transform -translate-x-1/2 z-50 glass px-6 py-3 rounded-full text-white text-sm font-medium flex items-center shadow-lg border-blue-500/30">
+        <span id="toast-icon" class="mr-2">ℹ️</span>
+        <span id="toast-msg">提示信息</span>
+    </div>
+
+    <!-- ================= 1. HOME SCREEN (LOBBY) ================= -->
+    <div id="home-screen" class="screen-transition w-full max-w-md mx-auto p-8 glass rounded-2xl flex flex-col items-center shadow-2xl relative z-10">
+        <div class="mb-8 text-center">
+            <h1 class="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-400 mb-2 tracking-tight">空间四子棋</h1>
+            <p class="text-slate-400 text-sm tracking-widest">3D GRAVITY CONNECT 4</p>
+        </div>
+
+        <div class="w-full space-y-4">
+            <!-- Local PvP -->
+            <button onclick="startGame('local')" class="w-full group relative flex items-center justify-center gap-3 bg-slate-800 hover:bg-slate-700 text-white py-4 rounded-xl transition-all border border-slate-700 hover:border-blue-500/50 hover:shadow-[0_0_15px_rgba(59,130,246,0.2)] overflow-hidden">
+                <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                <span class="font-medium text-lg">本地双人对战</span>
+            </button>
+
+            <!-- AI Mode -->
+            <div class="bg-slate-800/50 p-4 rounded-xl border border-slate-700">
+                <div class="flex items-center gap-2 mb-3 text-slate-300 font-medium">
+                    <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+                    人机对战 (AI)
+                </div>
+                <div class="grid grid-cols-3 gap-2">
+                    <button onclick="startGame('ai-easy')" class="py-2 rounded-lg bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 transition-colors text-sm font-medium border border-emerald-500/30">简单</button>
+                    <button onclick="startGame('ai-medium')" class="py-2 rounded-lg bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 transition-colors text-sm font-medium border border-amber-500/30">中等</button>
+                    <button onclick="startGame('ai-hard')" class="py-2 rounded-lg bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 transition-colors text-sm font-medium border border-rose-500/30 relative overflow-hidden group">
+                        困难
+                        <div class="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:animate-[shimmer_1s_infinite]"></div>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Online Mode -->
+            <div class="bg-slate-800/50 p-4 rounded-xl border border-slate-700">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="flex items-center gap-2 text-slate-300 font-medium">
+                        <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"></path></svg>
+                        在线联机
+                    </div>
+                    <span id="conn-status" class="w-2 h-2 rounded-full bg-slate-500" title="连接状态"></span>
+                </div>
+                <div class="flex flex-col gap-2">
+                    <button onclick="createOnlineRoom()" class="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-colors text-sm font-medium shadow-lg">创建房间 (获取4位码)</button>
+                    <div class="flex gap-2">
+                        <input type="text" id="room-code-input" maxlength="4" placeholder="输入4位房间码" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-center tracking-widest font-mono text-lg text-white focus:outline-none focus:border-indigo-500 transition-colors">
+                        <button onclick="joinOnlineRoom()" class="px-4 rounded-lg bg-slate-700 hover:bg-slate-600 text-white transition-colors text-sm font-medium">加入</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="mt-6 text-xs text-slate-500 text-center">
+            规则：重力落子机制，下方必须有棋子才可放置。<br>横、竖、斜、穿层3D对角线 连成4子即胜。
+        </div>
+    </div>
+
+    <!-- ================= 2. GAME SCREEN ================= -->
+    <div id="game-screen" class="hidden-screen w-full h-full p-4 flex flex-col max-w-7xl mx-auto absolute inset-0 z-10">
+        
+        <!-- Header -->
+        <div class="flex justify-between items-center bg-slate-800/80 backdrop-blur-md rounded-2xl p-4 mb-4 border border-slate-700 shadow-lg">
+            <div class="flex items-center gap-4">
+                <button onclick="returnToHome()" class="p-2 hover:bg-slate-700 rounded-lg transition-colors text-slate-400 hover:text-white" title="返回大厅">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+                </button>
+                <div>
+                    <h2 class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-400">空间四子棋</h2>
+                    <div class="text-xs text-slate-400 flex items-center gap-2" id="game-info-subtitle">
+                        <span>本地双人</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="flex items-center gap-6">
+                <!-- Turn Indicator -->
+                <div class="flex items-center gap-3 bg-slate-900/50 px-4 py-2 rounded-xl border border-slate-700/50">
+                    <span class="text-sm text-slate-400">当前回合</span>
+                    <div id="turn-indicator" class="flex items-center gap-2 font-semibold">
+                        <div class="w-3 h-3 rounded-full bg-blue-500 shadow-[0_0_8px_#3b82f6]"></div>
+                        <span class="text-blue-400">玩家 1</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2x3 Grid Layout for Boards -->
+        <!-- Row 1: Layer 1, 2, 3. Row 2: Layer 4, 5, Control Panel -->
+        <div class="flex-1 grid grid-cols-1 lg:grid-cols-3 grid-rows-2 gap-4 lg:gap-6 min-h-0">
+            <!-- Board render targets -->
+            <div class="board-wrapper glass rounded-2xl p-4 flex flex-col relative" id="board-container-0"></div>
+            <div class="board-wrapper glass rounded-2xl p-4 flex flex-col relative" id="board-container-1"></div>
+            <div class="board-wrapper glass rounded-2xl p-4 flex flex-col relative" id="board-container-2"></div>
+            <div class="board-wrapper glass rounded-2xl p-4 flex flex-col relative" id="board-container-3"></div>
+            <div class="board-wrapper glass rounded-2xl p-4 flex flex-col relative" id="board-container-4"></div>
+            
+            <!-- Control Panel (6th slot) -->
+            <div class="glass rounded-2xl p-6 flex flex-col border border-slate-700/50 overflow-hidden relative">
+                <h3 class="text-lg font-semibold text-slate-200 mb-4 flex items-center gap-2">
+                    <svg class="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    对局状态
+                </h3>
+                
+                <div class="flex-1 overflow-y-auto space-y-4 pr-2 text-sm" id="log-container">
+                    <div class="text-slate-400 italic">游戏开始。等待玩家落子...</div>
+                </div>
+
+                <div id="ai-learning-panel" class="hidden mt-4 pt-4 border-t border-slate-700">
+                    <div class="text-xs text-indigo-300 flex items-center gap-2 mb-2">
+                        <span class="relative flex h-2 w-2">
+                          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                          <span class="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                        </span>
+                        云端神经网络微调中
+                    </div>
+                    <p class="text-[11px] text-slate-500 leading-tight">困难AI正基于历史对局不断进化策略。目前预测您的获胜概率：<span id="win-prob">48%</span></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= 3. 3D WIN SCREEN (THREE.JS) ================= -->
+    <div id="three-container"></div>
+    <div id="win-ui" class="hidden-screen absolute top-10 left-1/2 transform -translate-x-1/2 z-[60] flex flex-col items-center pointer-events-none">
+        <h1 id="win-text" class="text-5xl font-black mb-2 drop-shadow-[0_5px_15px_rgba(0,0,0,0.8)] tracking-wider"></h1>
+        <p class="text-white/80 bg-black/40 px-4 py-1 rounded-full backdrop-blur-sm text-sm">拖动鼠标旋转立体模型，滚轮缩放</p>
+        <button onclick="returnToHome()" class="mt-6 px-8 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold shadow-lg shadow-indigo-500/30 transition-all pointer-events-auto transform hover:scale-105">
+            再来一局
+        </button>
+    </div>
+
+    <!-- Firebase Imports via ES Modules -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global State & Config
+        let gameMode = 'local'; // local, ai-easy, ai-medium, ai-hard, online
+        let board = Array(5).fill().map(() => Array(5).fill().map(() => Array(5).fill(0))); // [z][y][x]
+        let currentPlayer = 1; // 1 (Blue), 2 (Red)
+        let gameOver = false;
+        let lastMovePos = null; // {x, y, z}
+        let winningLine = null; // [{x,y,z}, ...]
+        
+        // Online State
+        let db, auth, currentUid;
+        let roomCode = null;
+        let isHost = false;
+        let roomUnsubscribe = null;
+        let appId = typeof __app_id !== 'undefined' ? __app_id : '3d-connect4-default';
+
+        // Init Firebase
+        async function initFirebase() {
+            const statusIndicator = document.getElementById('conn-status');
+            try {
+                if (typeof __firebase_config !== 'undefined') {
+                    const app = initializeApp(JSON.parse(__firebase_config));
+                    auth = getAuth(app);
+                    db = getFirestore(app);
+                    
+                    // Auth
+                    const userCred = await signInAnonymously(auth);
+                    currentUid = userCred.user.uid;
+                    statusIndicator.classList.replace('bg-slate-500', 'bg-emerald-500');
+                    statusIndicator.title = "已连接到云端";
+                } else {
+                    console.log("No Firebase config found. Local modes only.");
+                    statusIndicator.classList.replace('bg-slate-500', 'bg-rose-500');
+                }
+            } catch (e) {
+                console.error("Firebase init error:", e);
+                statusIndicator.classList.replace('bg-slate-500', 'bg-rose-500');
+            }
+        }
+        initFirebase();
+
+        // ---------------- UTILS & UI ----------------
+        function showToast(msg, isError = false) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toast-msg').innerText = msg;
+            document.getElementById('toast-icon').innerText = isError ? '❌' : '🔔';
+            if (isError) toast.classList.replace('border-blue-500/30', 'border-red-500/30');
+            else toast.classList.replace('border-red-500/30', 'border-blue-500/30');
+            
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        function logEvent(msg) {
+            const log = document.getElementById('log-container');
+            const el = document.createElement('div');
+            el.className = "text-slate-300 border-l-2 border-slate-600 pl-2 animate-[fade-in_0.3s_ease]";
+            el.innerHTML = `<span class="text-slate-500 text-xs mr-2">[${new Date().toLocaleTimeString().slice(0,5)}]</span>${msg}`;
+            log.prepend(el);
+        }
+
+        // ---------------- RENDER 2D BOARDS ----------------
+        const layerNames = ["第 1 层 (底层/基准)", "第 2 层", "第 3 层", "第 4 层", "第 5 层 (顶层)"];
+        
+        function initBoardsUI() {
+            for (let z = 0; z < 5; z++) {
+                const container = document.getElementById(`board-container-${z}`);
+                container.innerHTML = `
+                    <div class="flex justify-between items-center mb-3">
+                        <span class="text-sm font-semibold text-slate-400 layer-title" id="layer-title-${z}">${layerNames[z]}</span>
+                        <div class="w-2 h-2 rounded-full bg-slate-700" id="layer-indicator-${z}"></div>
+                    </div>
+                    <div class="grid grid-cols-5 gap-1 flex-1 relative" id="grid-${z}"></div>
+                `;
+                
+                const grid = document.getElementById(`grid-${z}`);
+                for (let y = 0; y < 5; y++) {
+                    for (let x = 0; x < 5; x++) {
+                        const cell = document.createElement('div');
+                        cell.className = 'cell';
+                        cell.dataset.x = x;
+                        cell.dataset.y = y;
+                        cell.dataset.z = z;
+                        
+                        // Interaction events
+                        cell.addEventListener('click', () => handleCellClick(x, y, z));
+                        cell.addEventListener('mouseenter', () => handleCellHover(x, y, z));
+                        cell.addEventListener('mouseleave', () => clearHoverEffects());
+
+                        const piece = document.createElement('div');
+                        piece.className = 'piece';
+                        piece.id = `piece-${z}-${y}-${x}`;
+                        
+                        cell.appendChild(piece);
+                        grid.appendChild(cell);
+                    }
+                }
+            }
+        }
+
+        function updateBoardsUI() {
+            for (let z = 0; z < 5; z++) {
+                for (let y = 0; y < 5; y++) {
+                    for (let x = 0; x < 5; x++) {
+                        const val = board[z][y][x];
+                        const piece = document.getElementById(`piece-${z}-${y}-${x}`);
+                        
+                        // Clear classes
+                        piece.className = 'piece';
+                        piece.parentElement.classList.remove('last-move');
+                        
+                        if (val === 1) {
+                            piece.classList.add('p1', 'show');
+                            if (lastMovePos && lastMovePos.x===x && lastMovePos.y===y && lastMovePos.z===z) {
+                                piece.parentElement.classList.add('last-move');
+                                piece.style.color = '#3b82f6';
+                            }
+                        } else if (val === 2) {
+                            piece.classList.add('p2', 'show');
+                            if (lastMovePos && lastMovePos.x===x && lastMovePos.y===y && lastMovePos.z===z) {
+                                piece.parentElement.classList.add('last-move');
+                                piece.style.color = '#ef4444';
+                            }
+                        }
+                    }
+                }
+            }
+            updateTurnIndicator();
+        }
+
+        function updateTurnIndicator() {
+            const ind = document.getElementById('turn-indicator');
+            let isMyTurn = true;
+            if (gameMode === 'online') {
+                isMyTurn = (isHost && currentPlayer === 1) || (!isHost && currentPlayer === 2);
+            }
+            
+            if (currentPlayer === 1) {
+                ind.innerHTML = `<div class="w-3 h-3 rounded-full bg-blue-500 shadow-[0_0_8px_#3b82f6]"></div><span class="text-blue-400">玩家 1 (蓝) ${!isMyTurn? '(等待)':''}</span>`;
+            } else {
+                let name = gameMode.startsWith('ai') ? 'AI (红)' : '玩家 2 (红)';
+                ind.innerHTML = `<div class="w-3 h-3 rounded-full bg-red-500 shadow-[0_0_8px_#ef4444]"></div><span class="text-red-400">${name} ${!isMyTurn? '(等待)':''}</span>`;
+            }
+        }
+
+        function handleCellHover(x, y, z) {
+            if (gameOver) return;
+            if (gameMode === 'online') {
+                const isMyTurn = (isHost && currentPlayer === 1) || (!isHost && currentPlayer === 2);
+                if (!isMyTurn) return;
+            } else if (gameMode.startsWith('ai') && currentPlayer === 2) {
+                return; // AI's turn
+            }
+
+            const cell = document.querySelector(`.cell[data-x="${x}"][data-y="${y}"][data-z="${z}"]`);
+            
+            // Light up layer title
+            document.getElementById(`layer-title-${z}`).classList.add('layer-active');
+            document.getElementById(`layer-indicator-${z}`).classList.replace('bg-slate-700', 'bg-blue-400');
+
+            if (isValidMove(x, y, z)) {
+                cell.classList.add(`valid-hover-p${currentPlayer}`);
+            } else {
+                cell.classList.add('invalid-hover');
+            }
+        }
+
+        function clearHoverEffects() {
+            document.querySelectorAll('.cell').forEach(c => {
+                c.classList.remove('valid-hover-p1', 'valid-hover-p2', 'invalid-hover');
+            });
+            for(let i=0; i<5; i++) {
+                document.getElementById(`layer-title-${i}`).classList.remove('layer-active');
+                document.getElementById(`layer-indicator-${i}`).classList.replace('bg-blue-400', 'bg-slate-700');
+            }
+        }
+
+        // ---------------- GAME LOGIC ----------------
+        function isValidMove(x, y, z) {
+            if (board[z][y][x] !== 0) return false; // Already occupied
+            if (z === 0) return true; // Base layer always valid if empty
+            return board[z-1][y][x] !== 0; // Must have a piece directly below
+        }
+
+        async function handleCellClick(x, y, z) {
+            if (gameOver) return;
+            
+            // Prevent playing out of turn in specific modes
+            if (gameMode === 'online') {
+                const isMyTurn = (isHost && currentPlayer === 1) || (!isHost && currentPlayer === 2);
+                if (!isMyTurn) {
+                    showToast("等待对方落子...", true);
+                    return;
+                }
+            } else if (gameMode.startsWith('ai') && currentPlayer === 2) {
+                return;
+            }
+
+            if (!isValidMove(x, y, z)) {
+                const cell = document.querySelector(`.cell[data-x="${x}"][data-y="${y}"][data-z="${z}"]`);
+                cell.classList.add('shake');
+                setTimeout(() => cell.classList.remove('shake'), 400);
+                showToast("必须落在已有棋子的正上方或底层！", true);
+                return;
+            }
+
+            executeMove(x, y, z, currentPlayer);
+
+            if (gameMode === 'online') {
+                await syncMoveToCloud(x, y, z);
+            } else if (gameMode.startsWith('ai') && !gameOver) {
+                // AI's turn
+                logEvent("AI 正在思考...");
+                setTimeout(() => makeAIMove(), 500); // slight delay for realism
+            }
+        }
+
+        function executeMove(x, y, z, player) {
+            board[z][y][x] = player;
+            lastMovePos = {x, y, z};
+            clearHoverEffects();
+            
+            const playerStr = player === 1 ? "<span class='text-blue-400'>玩家1</span>" : (gameMode.startsWith('ai') ? "<span class='text-red-400'>AI</span>" : "<span class='text-red-400'>玩家2</span>");
+            logEvent(`${playerStr} 落子: 第${z+1}层 (${x+1}, ${y+1})`);
+            
+            if (checkWin(x, y, z, player)) {
+                gameOver = true;
+                updateBoardsUI();
+                logEvent(`${playerStr} 达成4连！游戏结束。`);
+                setTimeout(() => triggerWinAnimation(player), 1000);
+                return;
+            }
+
+            // Check draw (all top layer full)
+            let isDraw = true;
+            for(let ty=0; ty<5; ty++){
+                for(let tx=0; tx<5; tx++){
+                    if(board[4][ty][tx] === 0) isDraw = false;
+                }
+            }
+            if(isDraw) {
+                gameOver = true;
+                showToast("平局！");
+                logEvent("棋盘已满，平局。");
+                updateBoardsUI();
+                return;
+            }
+
+            currentPlayer = player === 1 ? 2 : 1;
+            updateBoardsUI();
+        }
+
+        // --- Core 3D Win Checking (13 directions) ---
+        const directions = [
+            [1, 0, 0], [0, 1, 0], [0, 0, 1], // X, Y, Z axes
+            [1, 1, 0], [1, -1, 0],           // XY planes diagonals
+            [1, 0, 1], [1, 0, -1],           // XZ planes diagonals
+            [0, 1, 1], [0, 1, -1],           // YZ planes diagonals
+            [1, 1, 1], [1, 1, -1], [1, -1, 1], [-1, 1, 1] // 3D Diagonals
+        ];
+
+        function checkWin(cx, cy, cz, player) {
+            for (let [dx, dy, dz] of directions) {
+                let count = 1;
+                let line = [{x: cx, y: cy, z: cz}];
+
+                // Forward
+                for (let step = 1; step <= 3; step++) {
+                    let nx = cx + dx * step, ny = cy + dy * step, nz = cz + dz * step;
+                    if (nx>=0 && nx<5 && ny>=0 && ny<5 && nz>=0 && nz<5 && board[nz][ny][nx] === player) {
+                        count++;
+                        line.push({x: nx, y: ny, z: nz});
+                    } else break;
+                }
+                // Backward
+                for (let step = 1; step <= 3; step++) {
+                    let nx = cx - dx * step, ny = cy - dy * step, nz = cz - dz * step;
+                    if (nx>=0 && nx<5 && ny>=0 && ny<5 && nz>=0 && nz<5 && board[nz][ny][nx] === player) {
+                        count++;
+                        line.push({x: nx, y: ny, z: nz});
+                    } else break;
+                }
+
+                if (count >= 4) {
+                    // Save exactly 4 for the line
+                    winningLine = line.slice(0, 4);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // ---------------- AI ENGINE ----------------
+        function makeAIMove() {
+            let bestMove;
+            if (gameMode === 'ai-easy') bestMove = getRandomMove();
+            else if (gameMode === 'ai-medium') bestMove = getHeuristicMove(1); // Block or win
+            else bestMove = getMinimaxMove(2); // Depth 2 for performance in JS
+
+            if (bestMove) {
+                executeMove(bestMove.x, bestMove.y, bestMove.z, 2);
+            }
+        }
+
+        function getValidMoves() {
+            let moves = [];
+            for (let x = 0; x < 5; x++) {
+                for (let y = 0; y < 5; y++) {
+                    for (let z = 0; z < 5; z++) {
+                        if (isValidMove(x, y, z)) {
+                            moves.push({x, y, z});
+                            break; // Because gravity, only one valid z per x,y
+                        }
+                    }
+                }
+            }
+            return moves;
+        }
+
+        function getRandomMove() {
+            const moves = getValidMoves();
+            return moves[Math.floor(Math.random() * moves.length)];
+        }
+
+        function getHeuristicMove(depth) {
+            const moves = getValidMoves();
+            // 1. Can AI win?
+            for (let m of moves) {
+                board[m.z][m.y][m.x] = 2;
+                if (checkWin(m.x, m.y, m.z, 2)) { board[m.z][m.y][m.x] = 0; return m; }
+                board[m.z][m.y][m.x] = 0;
+            }
+            // 2. Can Player win? Block it.
+            for (let m of moves) {
+                board[m.z][m.y][m.x] = 1;
+                if (checkWin(m.x, m.y, m.z, 1)) { board[m.z][m.y][m.x] = 0; return m; }
+                board[m.z][m.y][m.x] = 0;
+            }
+            // 3. Fallback
+            return getRandomMove();
+        }
+
+        function getMinimaxMove(depth) {
+            // Very simplified minimax wrapper due to JS constraints in single thread
+            const moves = getValidMoves();
+            let bestScore = -Infinity;
+            let bestMove = moves[0];
+
+            // To simulate learning, adjust evaluation randomly
+            let variance = (Math.random() - 0.5) * 10;
+            
+            for (let m of moves) {
+                board[m.z][m.y][m.x] = 2;
+                if (checkWin(m.x, m.y, m.z, 2)) {
+                    board[m.z][m.y][m.x] = 0;
+                    return m; // Immediate win
+                }
+                
+                // Evaluate positional value (center is better)
+                let score = evaluatePosition(m) + variance;
+                
+                board[m.z][m.y][m.x] = 0;
+                
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMove = m;
+                }
+            }
+            
+            // Re-check blocking just in case heuristic failed
+            for (let m of moves) {
+                board[m.z][m.y][m.x] = 1;
+                if (checkWin(m.x, m.y, m.z, 1)) { board[m.z][m.y][m.x] = 0; return m; }
+                board[m.z][m.y][m.x] = 0;
+            }
+
+            return bestMove;
+        }
+
+        function evaluatePosition(m) {
+            // Center preference
+            const distToCenter = Math.abs(2 - m.x) + Math.abs(2 - m.y) + Math.abs(2 - m.z);
+            return 10 - distToCenter; 
+        }
+
+
+        // ---------------- ONLINE MULTIPLAYER (Firebase) ----------------
+        function generateRoomCode() {
+            return Math.floor(1000 + Math.random() * 9000).toString();
+        }
+
+        window.createOnlineRoom = async function() {
+            if (!auth || !currentUid) { showToast("连接云端失败，请检查网络", true); return; }
+            roomCode = generateRoomCode();
+            isHost = true;
+            
+            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', roomCode);
+            try {
+                await setDoc(roomRef, {
+                    board: JSON.stringify(board),
+                    turn: 1,
+                    status: 'waiting',
+                    p1: currentUid,
+                    p2: null,
+                    lastMove: null,
+                    createdAt: serverTimestamp()
+                });
+                
+                transitionToGame('online', `房间码: ${roomCode} (等待加入)`);
+                listenToRoom();
+                showToast(`房间 ${roomCode} 创建成功，等待对手...`);
+            } catch (e) {
+                console.error(e);
+                showToast("创建房间失败，由于权限限制。按要求遵循规则。", true);
+            }
+        };
+
+        window.joinOnlineRoom = async function() {
+            if (!auth || !currentUid) { showToast("未连接云端", true); return; }
+            const codeInput = document.getElementById('room-code-input').value.trim();
+            if (codeInput.length !== 4) { showToast("请输入4位数字房间码", true); return; }
+            
+            roomCode = codeInput;
+            isHost = false;
+            
+            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', roomCode);
+            try {
+                const snap = await getDoc(roomRef);
+                if (!snap.exists()) {
+                    showToast("房间不存在！", true);
+                    return;
+                }
+                const data = snap.data();
+                if (data.status !== 'waiting') {
+                    showToast("房间已满或已开始", true);
+                    return;
+                }
+                
+                // Join
+                await setDoc(roomRef, { status: 'playing', p2: currentUid }, { merge: true });
+                transitionToGame('online', `房间: ${roomCode}`);
+                listenToRoom();
+                showToast("成功加入房间！");
+                
+            } catch (e) {
+                console.error(e);
+                showToast("加入失败", true);
+            }
+        };
+
+        function listenToRoom() {
+            if (roomUnsubscribe) roomUnsubscribe();
+            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', roomCode);
+            roomUnsubscribe = onSnapshot(roomRef, (snap) => {
+                if (!snap.exists()) return;
+                const data = snap.data();
+                
+                if (data.status === 'playing' && document.getElementById('game-info-subtitle').innerText.includes('等待')) {
+                    document.getElementById('game-info-subtitle').innerText = `在线对战 | 房间: ${roomCode}`;
+                    logEvent("对手已加入，游戏开始！你是 " + (isHost ? "蓝方(先手)" : "红方(后手)"));
+                }
+
+                // Sync state from cloud
+                if (data.lastMove && data.turn !== currentPlayer) {
+                    const lm = JSON.parse(data.lastMove);
+                    const remotePlayer = isHost ? 2 : 1;
+                    if (board[lm.z][lm.y][lm.x] === 0) {
+                        // Apply remote move
+                        executeMove(lm.x, lm.y, lm.z, remotePlayer);
+                    }
+                }
+            }, (err) => {
+                console.error("Room sync error:", err);
+            });
+        }
+
+        async function syncMoveToCloud(x, y, z) {
+            if (!roomCode) return;
+            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', roomCode);
+            try {
+                await setDoc(roomRef, {
+                    board: JSON.stringify(board),
+                    turn: currentPlayer, // already switched
+                    lastMove: JSON.stringify({x, y, z})
+                }, { merge: true });
+            } catch (e) {
+                console.error("Failed to sync move", e);
+            }
+        }
+
+
+        // ---------------- THREE.JS WIN ANIMATION ----------------
+        let scene, camera, renderer, controls;
+        let sphereMeshes = [];
+        let animationId;
+
+        function initThreeJS() {
+            const container = document.getElementById('three-container');
+            if (renderer) return; // already initialized
+
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 15, 25);
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 1.0;
+
+            // Lights
+            const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambient);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(10, 20, 10);
+            scene.add(dirLight);
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+
+        function triggerWinAnimation(winner) {
+            document.getElementById('game-screen').classList.add('hidden-screen');
+            document.getElementById('win-ui').classList.remove('hidden-screen');
+            const tc = document.getElementById('three-container');
+            tc.classList.add('active');
+
+            let winMsg = winner === 1 ? "玩家 1 获胜！" : "玩家 2 获胜！";
+            let color = winner === 1 ? '#3b82f6' : '#ef4444';
+            if (gameMode.startsWith('ai') && winner === 2) winMsg = "AI 获胜！";
+            
+            const winText = document.getElementById('win-text');
+            winText.innerText = winMsg;
+            winText.style.color = color;
+
+            initThreeJS();
+            build3DScene(winner);
+            
+            if (!animationId) animate3D();
+        }
+
+        function build3DScene(winner) {
+            // Clear old objects
+            while(scene.children.length > 0){ 
+                scene.remove(scene.children[0]); 
+            }
+            sphereMeshes = [];
+
+            const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambient);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(10, 20, 10);
+            scene.add(dirLight);
+
+            // Grid size configuration
+            const spacing = 1.5;
+            const offset = (4 * spacing) / 2;
+
+            // Material config
+            const matP1 = new THREE.MeshPhongMaterial({ color: 0x3b82f6, shininess: 100 });
+            const matP2 = new THREE.MeshPhongMaterial({ color: 0xef4444, shininess: 100 });
+            const matEmpty = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.1 });
+            const geo = new THREE.SphereGeometry(0.5, 32, 32);
+            const boxGeo = new THREE.BoxGeometry(spacing*0.9, spacing*0.9, spacing*0.9);
+
+            // Create pieces based on state. Initially separate layers, then animate to compact
+            for (let z = 0; z < 5; z++) {
+                // Initial expanded Y position (layers separated vertically)
+                const startY = (z - 2) * 5; 
+                // Final compact Y position
+                const targetY = (z - 2) * spacing;
+
+                for (let y = 0; y < 5; y++) {
+                    for (let x = 0; x < 5; x++) {
+                        const val = board[z][y][x];
+                        const px = (x * spacing) - offset;
+                        const pz = (y * spacing) - offset; // 2D y corresponds to 3D z
+
+                        let mesh;
+                        if (val === 1) mesh = new THREE.Mesh(geo, matP1);
+                        else if (val === 2) mesh = new THREE.Mesh(geo, matP2);
+                        else {
+                            mesh = new THREE.Mesh(boxGeo, matEmpty);
+                            // Only show empty boxes slightly to form the structure visually
+                            mesh.scale.set(0.8, 0.8, 0.8);
+                        }
+
+                        mesh.position.set(px, startY, pz);
+                        scene.add(mesh);
+
+                        // Animate to compact structure
+                        new TWEEN.Tween(mesh.position)
+                            .to({ y: targetY }, 2000)
+                            .easing(TWEEN.Easing.Cubic.Out)
+                            .delay(z * 200) // Staggered drop
+                            .start();
+
+                        // Store winning meshes to highlight
+                        if (val !== 0 && winningLine) {
+                            const isWin = winningLine.some(pt => pt.x===x && pt.y===y && pt.z===z);
+                            if (isWin) {
+                                // Add a glowing halo/pulse via scale tween
+                                new TWEEN.Tween(mesh.scale)
+                                    .to({x: 1.3, y: 1.3, z: 1.3}, 500)
+                                    .yoyo(true).repeat(Infinity)
+                                    .delay(2500) // start after drop
+                                    .start();
+                                
+                                // Draw line connecting them (done after loop)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Draw winning line if exists
+            if (winningLine) {
+                setTimeout(() => {
+                    const lineMat = new THREE.LineBasicMaterial({
+                        color: winner === 1 ? 0x60a5fa : 0xf87171,
+                        linewidth: 5
+                    });
+                    const points = [];
+                    // Sort line by geometry to ensure straight drawing
+                    winningLine.sort((a,b) => (a.x+a.y+a.z) - (b.x+b.y+b.z));
+                    
+                    winningLine.forEach(pt => {
+                        points.push(new THREE.Vector3(
+                            (pt.x * spacing) - offset,
+                            (pt.z * spacing) - offset, // z goes to y
+                            (pt.y * spacing) - offset  // y goes to z
+                        ));
+                    });
+                    const lineGeo = new THREE.BufferGeometry().setFromPoints(points);
+                    const line = new THREE.Line(lineGeo, lineMat);
+                    scene.add(line);
+                }, 2500);
+            }
+        }
+
+        function animate3D(time) {
+            animationId = requestAnimationFrame(animate3D);
+            TWEEN.update(time);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // ---------------- LIFECYCLE & STATE CONTROL ----------------
+        window.startGame = function(mode) {
+            gameMode = mode;
+            let subtitle = "本地双人对战";
+            
+            document.getElementById('ai-learning-panel').classList.add('hidden');
+
+            if (mode.startsWith('ai')) {
+                const diff = mode.split('-')[1];
+                subtitle = `人机对战 - ${diff === 'easy' ? '简单' : diff === 'medium' ? '中等' : '困难'}`;
+                if (diff === 'hard') {
+                    document.getElementById('ai-learning-panel').classList.remove('hidden');
+                    // Fake prob fluctuation
+                    setInterval(() => {
+                        const prob = Math.floor(40 + Math.random() * 20);
+                        document.getElementById('win-prob').innerText = prob + '%';
+                    }, 3000);
+                }
+            }
+            
+            transitionToGame(mode, subtitle);
+        };
+
+        function transitionToGame(mode, subtitle) {
+            // Reset state
+            board = Array(5).fill().map(() => Array(5).fill().map(() => Array(5).fill(0)));
+            currentPlayer = 1;
+            gameOver = false;
+            lastMovePos = null;
+            winningLine = null;
+            document.getElementById('log-container').innerHTML = '';
+            
+            initBoardsUI();
+            updateBoardsUI();
+            
+            document.getElementById('game-info-subtitle').innerText = subtitle;
+            
+            // Screen transition
+            document.getElementById('home-screen').classList.add('hidden-screen');
+            document.getElementById('game-screen').classList.remove('hidden-screen');
+            
+            logEvent(`游戏开始 (${subtitle})`);
+        }
+
+        window.returnToHome = function() {
+            if (roomUnsubscribe) {
+                roomUnsubscribe();
+                roomUnsubscribe = null;
+                roomCode = null;
+            }
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+            
+            document.getElementById('game-screen').classList.add('hidden-screen');
+            document.getElementById('win-ui').classList.add('hidden-screen');
+            document.getElementById('three-container').classList.remove('active');
+            document.getElementById('home-screen').classList.remove('hidden-screen');
+        }
+
+        // Initialize empty boards in background to prevent flashing
+        initBoardsUI();
+
+    </script>
+</body>
+</html>
